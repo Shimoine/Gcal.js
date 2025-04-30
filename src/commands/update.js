@@ -30,8 +30,6 @@ export async function hasUpdates(isForked) {
       const hasUpstream = remotes.includes('upstream');
 
       if (!hasUpstream) {
-        updateBox.setContent(updateBox.getContent() + 'Adding upstream remote...\n');
-        screen.render();
         const upstreamUrl = `https://${originalRepoUrl}.git`;
         await execPromise(`git remote add upstream ${upstreamUrl}`);
       }
