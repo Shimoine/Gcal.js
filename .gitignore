@@ -5,3 +5,8 @@ node_modules/
 Gcal.db
 db/*
 !db/.gitkeep
+setting.json
+.env
+
+.github
+references/

@@ -1,0 +1,44 @@
+{
+    "keyBindings": {
+        "quit": [
+            "q",
+            "C-c"
+        ],
+        "addEvent": [
+            "a",
+            "insert"
+        ],
+        "nextWeek": [
+            "n",
+            "right"
+        ],
+        "prevWeek": [
+            "p",
+            "left"
+        ],
+        "nextMonth": [
+            "C-n",
+            "S-right"
+        ],
+        "prevMonth": [
+            "C-p",
+            "S-left"
+        ],
+        "today": [
+            "t",
+            "home"
+        ],
+        "fullscreenTable1": [
+            "1"
+        ],
+        "fullscreenTable2": [
+            "2"
+        ],
+        "fullscreenTable3": [
+            "3"
+        ],
+        "exitFullscreen": [
+            "escape"
+        ]
+    }
+}

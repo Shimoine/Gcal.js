@@ -4,11 +4,16 @@ import { insertEventsToDatabase, fetchEventsFromDatabase } from '../services/dat
 import { fetchCommandList } from '../services/commandService.js';
 import { setupVimKeysForNavigation } from './keyConfig.js';
 import { convertToDateTime, getDayOfWeek } from '../utils/dateUtils.js';
-import { createEventTable, createLeftTable, createLogTable } from './table.js';
+import { createEventDetailTable, createEventTable, createLeftTable, createLogTable } from './table.js';
 import { createGraph, insertDataToGraph } from './graph.js';
 import Event from '../models/event.js';
 import pkg from 'japanese-holidays';
 const { isHoliday } = pkg;
+
+// 全画面表示状態管理
+let currentDisplayMode = 'split'; // 'split', 'fullscreen1', 'fullscreen2', 'fullscreen3'
+let originalLayouts = {}; // 各テーブルの元の位置・サイズ情報
+let tableReferences = {}; // テーブル参照を保持
 
 export function fillEmptyEvents(events, date) {
   const filledEvents = [];
@@ -351,6 +356,169 @@ export function updateEventsAndUI(screen, events, allEvents, leftTable, rightGra
   screen.render();
 }
 
+export let commandPopup = null;
+export let screenInstance = null;
+export let inputBoxHidden = true;
+
+// 全画面表示機能の関数群
+export function saveOriginalLayout(table, tableId) {
+  originalLayouts[tableId] = {
+    top: table.top,
+    left: table.left,
+    width: table.width,
+    height: table.height,
+    hidden: table.hidden
+  };
+}
+
+// デフォルトレイアウトを再計算する関数
+export function recalculateDefaultLayouts() {
+  const defaultLayouts = {
+    leftTable: {
+      top: 0,
+      left: 0,
+      width: '50%',
+      height: '100%',
+      hidden: false
+    },
+    rightGraph: {
+      top: 0,
+      left: '50%',
+      width: '50%',
+      height: '80%',
+      hidden: false
+    },
+    logTable: {
+      top: '80%',
+      left: '50%',
+      width: '50%',
+      height: '22%',
+      hidden: false
+    }
+  };
+
+  // originalLayoutsを新しいデフォルト値で更新
+  Object.keys(defaultLayouts).forEach(tableId => {
+    if (originalLayouts[tableId]) {
+      originalLayouts[tableId] = { ...defaultLayouts[tableId] };
+    }
+  });
+}
+
+// ターミナルサイズ変更時のレイアウト更新
+export function handleTerminalResize() {
+  if (currentDisplayMode === 'split') {
+    // 3分割表示の場合、デフォルトレイアウトを再計算して適用
+    recalculateDefaultLayouts();
+    Object.keys(tableReferences).forEach(tableId => {
+      const table = tableReferences[tableId];
+      const layout = originalLayouts[tableId];
+      if (table && layout) {
+        table.top = layout.top;
+        table.left = layout.left;
+        table.width = layout.width;
+        table.height = layout.height;
+        table.hidden = layout.hidden;
+      }
+    });
+    if (screenInstance) {
+      screenInstance.render();
+    }
+  }
+  // 全画面表示の場合は何もしない（既に100%なので自動調整される）
+}
+
+export function resizeTable(table, fullscreen) {
+  if (fullscreen) {
+    table.top = 0;
+    table.left = 0;
+    table.width = '100%';
+    table.height = '100%';
+  } else {
+    const original = originalLayouts[table.tableId];
+    if (original) {
+      table.top = original.top;
+      table.left = original.left;
+      table.width = original.width;
+      table.height = original.height;
+    }
+  }
+}
+
+export function hideOtherTables(activeTableId) {
+  Object.keys(tableReferences).forEach(tableId => {
+    if (tableId !== activeTableId) {
+      tableReferences[tableId].hidden = true;
+    }
+  });
+}
+
+export function showAllTables() {
+  Object.keys(tableReferences).forEach(tableId => {
+    tableReferences[tableId].hidden = false;
+  });
+}
+
+export function toggleFullscreen(tableIndex) {
+  const tableIds = ['leftTable', 'rightGraph', 'logTable'];
+
+  // escapeキーの場合（tableIndex = 0）、3分割表示に戻る
+  if (tableIndex === 0) {
+    if (currentDisplayMode !== 'split') {
+      showAllTables();
+      Object.keys(tableReferences).forEach(tableId => {
+        resizeTable(tableReferences[tableId], false);
+      });
+      currentDisplayMode = 'split';
+      if (screenInstance) {
+        screenInstance.render();
+      }
+    }
+    return;
+  }
+
+  const targetTableId = tableIds[tableIndex - 1];
+
+  if (!targetTableId || !tableReferences[targetTableId]) {
+    return;
+  }
+
+  const targetDisplayMode = `fullscreen${tableIndex}`;
+
+  if (currentDisplayMode === targetDisplayMode) {
+    // 全画面表示から3分割表示に戻る
+    showAllTables();
+    Object.keys(tableReferences).forEach(tableId => {
+      resizeTable(tableReferences[tableId], false);
+    });
+    currentDisplayMode = 'split';
+  } else {
+    // 3分割表示または他の全画面表示から指定されたテーブルの全画面表示に切り替え
+    showAllTables(); // まず全て表示
+    Object.keys(tableReferences).forEach(tableId => {
+      resizeTable(tableReferences[tableId], false); // 元のサイズに戻す
+    });
+
+    // 指定されたテーブルを全画面表示
+    resizeTable(tableReferences[targetTableId], true);
+    hideOtherTables(targetTableId);
+    tableReferences[targetTableId].hidden = false;
+    currentDisplayMode = targetDisplayMode;
+  }
+
+  if (screenInstance) {
+    screenInstance.render();
+  }
+}
+
+export function removeCommandPopup() {
+  if (commandPopup && screenInstance) {
+    screenInstance.remove(commandPopup);
+    commandPopup = null;
+    screenInstance.render();
+  }
+}
+
 export function createLayout(calendars, events) {
   const calendarNames = Array.from(
     new Set(calendars.map(calendar => calendar.summary))
@@ -362,6 +530,13 @@ export function createLayout(calendars, events) {
     smartCSR: true,
     title: 'Google Calendar Events',
     fullUnicode: true,
+  });
+
+  screenInstance = screen;
+
+  // ターミナルサイズ変更のイベントリスナーを追加
+  screen.on('resize', () => {
+    handleTerminalResize();
   });
 
   const inputBox = blessed.textbox({
@@ -378,8 +553,151 @@ export function createLayout(calendars, events) {
     hidden: true
   });
 
+  inputBox.on('show', () => {
+    inputBoxHidden = false;
+  });
+
+  inputBox.on('hide', () => {
+    inputBoxHidden = true;
+    removeCommandPopup();
+  });
+
+  inputBox.on('focus', () => {
+    if (!inputBoxHidden) {
+      setTimeout(() => {
+        const currentInput = inputBox.getValue().trim();
+        showFilteredCommands(currentInput);
+        screen.render();
+      }, 10);
+    }
+  });
+
+  inputBox.on('keypress', (ch, key) => {
+    if (key.name === 'escape') {
+      if (commandPopup) {
+        removeCommandPopup();
+      }
+      return;
+    }
+
+    if (key.name === 'return') {
+      inputBoxHidden = true;
+      return;
+    }
+
+    if (key.name !== 'tab') {
+      setTimeout(() => {
+        if (!inputBoxHidden) {
+          const currentInput = inputBox.getValue().trim();
+          showFilteredCommands(currentInput);
+        }
+      }, 10);
+    }
+  });
+
+  inputBox.key(['return'], () => {
+    removeCommandPopup();
+    inputBoxHidden = true;
+  });
+
+  inputBox.key(['tab'], () => {
+    const currentInput = inputBox.getValue().trim();
+    const commands = fetchCommandList();
+
+    const matchingCommands = commands.filter(cmd =>
+      cmd.startsWith(currentInput) && cmd !== currentInput);
+
+    if (matchingCommands.length === 1) {
+      inputBox.setValue(matchingCommands[0] + ' ');
+      showFilteredCommands(matchingCommands[0] + ' ');
+      screen.render();
+    } else if (matchingCommands.length > 1) {
+      let commonPrefix = currentInput;
+      let position = currentInput.length;
+      let allSameChar = true;
+
+      while (allSameChar && matchingCommands.every(cmd => cmd.length > position)) {
+        const char = matchingCommands[0][position];
+        allSameChar = matchingCommands.every(cmd => cmd[position] === char);
+        if (allSameChar) {
+          commonPrefix += char;
+          position++;
+        }
+      }
+
+      inputBox.setValue(commonPrefix);
+      showFilteredCommands(commonPrefix);
+      screen.render();
+    }
+  });
+
+  inputBox.key(['escape'], () => {
+    removeCommandPopup();
+    inputBox.hide();
+    screen.render();
+  });
+
+  function showFilteredCommands(input) {
+    if (inputBoxHidden) {
+      return;
+    }
+
+    const commands = fetchCommandList();
+    let filteredCommands = commands;
+
+    if (input) {
+      filteredCommands = commands.filter(cmd =>
+        cmd.startsWith(input));
+    }
+
+    if (filteredCommands.length === 0) {
+      removeCommandPopup();
+      return;
+    }
+
+    removeCommandPopup();
+
+    if (!inputBoxHidden) {
+      commandPopup = blessed.list({
+        parent: screenInstance,
+        top: inputBox.top + 3,
+        left: inputBox.left,
+        width: '40%',
+        height: Math.min(filteredCommands.length + 2, 10),
+        items: filteredCommands,
+        label: 'Command Completion',
+        border: { type: 'line', fg: 'cyan' },
+        style: {
+          fg: 'white',
+          bg: 'black',
+          selected: { fg: 'black', bg: 'green' }
+        },
+        keys: true,
+        mouse: true,
+        scrollable: true
+      });
+
+      commandPopup.on('select', (item) => {
+        inputBox.setValue(item + ' ');
+        screen.render();
+        inputBox.focus();
+      });
+
+      commandPopup.key(['escape'], () => {
+        removeCommandPopup();
+        screen.render();
+        inputBox.focus();
+      });
+
+      if (filteredCommands.length > 0) {
+        commandPopup.select(0);
+      }
+
+      screen.render();
+    }
+  }
+
   const list = blessed.list({
-    //parent: modalBox,
     top: 'center',
     left: 'center',
     width: '50%',
@@ -398,10 +716,10 @@ export function createLayout(calendars, events) {
   });
 
   const editCalendarCommandList = blessed.list({
-    top: 'center',
+    top: '50%',
     left: 'center',
     width: '50%',
-    height: '30%',
+    height: '20%',
     items: ['選択日にイベントを追加', 'イベントを編集', 'イベントをコピー', 'イベントを削除', '他のイベントを参照して選択日にコピー'],
     label: 'Edit List',
     border: { type: 'line', fg: 'yellow' },
@@ -416,7 +734,6 @@ export function createLayout(calendars, events) {
   });
 
   const commandList = blessed.list({
-    //parent: modalBox,
     top: 'center',
     left: 'center',
     width: '50%',
@@ -467,17 +784,33 @@ export function createLayout(calendars, events) {
   leftTable.select(searchIndexOfToday(events));
   leftTable.scrollTo(leftTable.selected + leftTable.height - 3);
   updateGraph(screen, rightGraph, leftTable.selected, events);
+  const eventDetailTable = createEventDetailTable(screen);
 
   screen.append(inputBox);
   screen.append(list);
   screen.append(editCalendarCommandList);
   screen.append(commandList);
   screen.append(commandDetailsBox);
+  screen.append(eventDetailTable);
   setupVimKeysForNavigation(leftTable, screen, null);
   setupVimKeysForNavigation(list, screen, null);
   setupVimKeysForNavigation(commandList, screen, null);
   setupVimKeysForNavigation(editCalendarCommandList, screen, null);
   setupVimKeysForNavigation(eventTable, screen, null);
+
+  // テーブル参照の初期化と元のレイアウト情報の保存
+  leftTable.tableId = 'leftTable';
+  rightGraph.tableId = 'rightGraph';
+  logTable.tableId = 'logTable';
+
+  tableReferences.leftTable = leftTable;
+  tableReferences.rightGraph = rightGraph;
+  tableReferences.logTable = logTable;
+
+  saveOriginalLayout(leftTable, 'leftTable');
+  saveOriginalLayout(rightGraph, 'rightGraph');
+  saveOriginalLayout(logTable, 'logTable');
+
   leftTable.focus();
   leftTable.key(['space'], () => {
     inputBox.show();
